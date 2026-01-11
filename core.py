@@ -52,7 +52,7 @@ class InvoiceItem:
     confidence: float
     match_strategy: str  # Track which strategy worked
 
-class ArabicTextNormalizer:
+class TextNormalizer:
     def __init__(self):
         self.replacements = [
             (r'[إأآا]', 'ا'),
@@ -77,22 +77,33 @@ class ArabicTextNormalizer:
         """Check if text contains Arabic characters"""
         arabic_pattern = r'[\u0600-\u06FF]'
         return bool(re.search(arabic_pattern, text))
+
+    def has_french(self, text: str) -> bool:
+        """Check if text contains French/Latin characters"""
+        french_pattern = r'[a-zA-Z\u00C0-\u00FF]'
+        return bool(re.search(french_pattern, text))
     
     def count_arabic_chars(self, text: str) -> int:
         """Count Arabic characters in text"""
         arabic_pattern = r'[\u0600-\u06FF]'
         return len(re.findall(arabic_pattern, text))
+
+    def count_french_chars(self, text: str) -> int:
+        """Count French/Latin characters in text"""
+        french_pattern = r'[a-zA-Z\u00C0-\u00FF]'
+        return len(re.findall(french_pattern, text))
     
-    def get_arabic_ratio(self, text: str) -> float:
-        """Get ratio of Arabic characters to total characters"""
+    def get_content_ratio(self, text: str) -> float:
+        """Get ratio of meaningful characters (Arabic + French) to total characters"""
         if not text:
             return 0.0
         arabic_count = self.count_arabic_chars(text)
+        french_count = self.count_french_chars(text)
         total_count = len([c for c in text if c.strip()])
-        return arabic_count / total_count if total_count > 0 else 0.0
+        return (arabic_count + french_count) / total_count if total_count > 0 else 0.0
 
 class PriceDatabase:
-    def __init__(self, csv_path: str, normalizer: ArabicTextNormalizer):
+    def __init__(self, csv_path: str, normalizer: TextNormalizer):
         self.products: List[Product] = []
         self.normalizer = normalizer
         self.synonyms: Dict[str, str] = {}
@@ -240,7 +251,7 @@ class PriceDatabase:
         return None, 0.0, "none"
 
 class InvoiceProcessor:
-    def __init__(self, price_db: PriceDatabase, normalizer: ArabicTextNormalizer, debug: bool = False):
+    def __init__(self, price_db: PriceDatabase, normalizer: TextNormalizer, debug: bool = False):
         self.price_db = price_db
         self.normalizer = normalizer
         self.debug = debug
@@ -268,7 +279,7 @@ class InvoiceProcessor:
         text = ""
         try:
             processed_img = self.preprocess_image(image_path)
-            custom_config = r'--oem 3 --psm 11 -l ara+eng'
+            custom_config = r'--oem 3 --psm 11 -l ara+fra'
             text = pytesseract.image_to_string(processed_img, config=custom_config)
         except Exception as e:
             print(f"Tesseract Error: {e}")
@@ -291,10 +302,14 @@ class InvoiceProcessor:
     
     def is_noise(self, text: str, normalized: str) -> Tuple[bool, str]:
         arabic_count = self.normalizer.count_arabic_chars(text)
-        if arabic_count < 3 and len(normalized) < 3:
+        french_count = self.normalizer.count_french_chars(text)
+        
+        if (arabic_count + french_count) < 3 and len(normalized) < 3:
             return True, "too short (< 3 chars)"
-        if not self.normalizer.has_arabic(text):
-            return True, "no Arabic content"
+        
+        if not self.normalizer.has_arabic(text) and not self.normalizer.has_french(text):
+            return True, "no Arabic/French content"
+            
         if normalized in UNIT_TOKENS:
             return True, f"unit token only ('{normalized}')"
         return False, ""
@@ -307,11 +322,13 @@ class InvoiceProcessor:
         weight = strategy_weights.get(strategy, 0.85)
         text_length = len(normalized)
         length_factor = min(1.0, text_length / 5.0)
-        arabic_ratio = self.normalizer.get_arabic_ratio(text)
-        arabic_factor = 0.8 + (arabic_ratio * 0.2)
-        weighted_score = base_score * weight * length_factor * arabic_factor
+        
+        content_ratio = self.normalizer.get_content_ratio(text)
+        content_factor = 0.8 + (content_ratio * 0.2)
+        
+        weighted_score = base_score * weight * length_factor * content_factor
         if self.debug:
-            print(f"  [SCORE] Base: {base_score:.0f}% | Strategy: {weight:.2f} | Length: {length_factor:.2f} | Arabic: {arabic_factor:.2f} → Final: {weighted_score:.0f}%")
+            print(f"  [SCORE] Base: {base_score:.0f}% | Strategy: {weight:.2f} | Length: {length_factor:.2f} | Content: {content_factor:.2f} → Final: {weighted_score:.0f}%")
         return weighted_score
     
     def has_semantic_anchor(self, text: str) -> bool:
@@ -319,7 +336,8 @@ class InvoiceProcessor:
         tokens = normalized.split()
         meaningful_count = 0
         for token in tokens:
-            if (self.normalizer.has_arabic(token) and 
+            is_valid_lang = self.normalizer.has_arabic(token) or self.normalizer.has_french(token)
+            if (is_valid_lang and 
                 token not in UNIT_TOKENS and 
                 len(token) >= 3):
                 meaningful_count += 1
@@ -492,7 +510,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     args = parser.parse_args()
     
-    normalizer = ArabicTextNormalizer()
+    normalizer = TextNormalizer()
     price_db = PriceDatabase(args.prices, normalizer)
     processor = InvoiceProcessor(price_db, normalizer, debug=args.debug)
     processor.process(args.image_path)
