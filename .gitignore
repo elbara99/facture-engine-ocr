@@ -1,6 +1,5 @@
 __pycache__/
 .venv/
-*.txt
 *.jpg
 *.png
 *.jpeg

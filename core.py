@@ -115,7 +115,7 @@ class PriceDatabase:
             print(f"Error: Price file not found at {csv_path}")
             sys.exit(1)
             
-        with open(csv_path, 'r', encoding='utf-8') as f:
+        with open(csv_path, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 clean_row = {k.strip(): v.strip() for k, v in row.items()}
@@ -141,7 +141,7 @@ class PriceDatabase:
             return
             
         try:
-            with open(synonym_path, 'r', encoding='utf-8') as f:
+            with open(synonym_path, 'r', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     # Skip empty rows or comments
